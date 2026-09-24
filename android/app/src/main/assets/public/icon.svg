@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0d9488" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#09090b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14b8a6"/>
+      <stop offset="50%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <!-- Background Glow -->
+  <circle cx="256" cy="256" r="240" fill="url(#glow)" />
+  
+  <!-- Outer Globe Ring -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="url(#brand)" stroke-width="16" stroke-linecap="round" stroke-dasharray="800 200" />
+  
+  <!-- Inner Ring / Grid -->
+  <ellipse cx="256" cy="256" rx="80" ry="180" fill="none" stroke="url(#brand)" stroke-width="8" stroke-opacity="0.6" stroke-dasharray="10 10" />
+  <line x1="76" y1="256" x2="436" y2="256" stroke="url(#brand)" stroke-width="8" stroke-opacity="0.6" stroke-dasharray="10 10" />
+  
+  <!-- Stylized Handset / Wave -->
+  <g transform="translate(166, 166)">
+    <!-- Main glowing phone node -->
+    <path d="M40 30 C 60 10, 120 10, 140 30 C 145 35, 145 45, 140 50 L 125 65 C 120 70, 110 70, 105 65 C 100 60, 95 60, 90 65 C 80 75, 70 85, 60 95 C 55 100, 55 105, 60 110 C 65 115, 65 125, 60 130 L 45 145 C 40 150, 30 150, 25 145 C 5 125, 5 65, 40 30 Z" fill="url(#brand)" />
+    <!-- Communication Waves -->
+    <path d="M 120 100 A 40 40 0 0 1 160 140" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" />
+    <path d="M 140 80 A 70 70 0 0 1 210 150" fill="none" stroke="#14b8a6" stroke-width="12" stroke-linecap="round" stroke-opacity="0.8" />
+  </g>
+</svg>

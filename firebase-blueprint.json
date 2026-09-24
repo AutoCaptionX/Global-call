@@ -1,0 +1,100 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Represents a registered user profile keyed by their phone number",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "name": { "type": "string" },
+        "username": { "type": "string" },
+        "avatarIdx": { "type": "number" },
+        "profileImage": { "type": "string" },
+        "status": { "type": "string", "enum": ["online", "offline"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "phoneNumber", "name", "username"]
+    },
+    "Friend": {
+      "title": "User Friend",
+      "description": "A contact added by a user",
+      "type": "object",
+      "properties": {
+        "phoneNumber": { "type": "string" },
+        "name": { "type": "string" },
+        "addedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["phoneNumber", "name"]
+    },
+    "ChatRoom": {
+      "title": "Chat Room",
+      "description": "Represents a chat room between two users",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string" },
+        "participants": { "type": "array" },
+        "lastMessage": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["roomId", "participants"]
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "A message sent inside a Chat Room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sender": { "type": "string" },
+        "recipient": { "type": "string" },
+        "text": { "type": "string" },
+        "type": { "type": "string", "enum": ["text", "voice", "emoji"] },
+        "voiceUrl": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sender", "recipient", "text", "type"]
+    },
+    "CallSession": {
+      "title": "Call Session",
+      "description": "Active WebRTC calling signaling session",
+      "type": "object",
+      "properties": {
+        "caller": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerAvatarIdx": { "type": "number" },
+        "callerProfileImage": { "type": "string" },
+        "recipient": { "type": "string" },
+        "callType": { "type": "string", "enum": ["audio", "video"] },
+        "status": { "type": "string", "enum": ["dialing", "ringing", "connected", "hangup", "rejected"] },
+        "offer": { "type": "string" },
+        "answer": { "type": "string" },
+        "callerCandidates": { "type": "array" },
+        "recipientCandidates": { "type": "array" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["caller", "recipient", "callType", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{phoneNumber}": {
+      "schema": "User",
+      "description": "Primary user profiles"
+    },
+    "/users/{phoneNumber}/friends/{friendPhoneNumber}": {
+      "schema": "Friend",
+      "description": "Contacts added by a user"
+    },
+    "/chats/{roomId}": {
+      "schema": "ChatRoom",
+      "description": "Chat rooms"
+    },
+    "/chats/{roomId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Messages inside a room"
+    },
+    "/calls/{callId}": {
+      "schema": "CallSession",
+      "description": "Real-time call signals"
+    }
+  }
+}

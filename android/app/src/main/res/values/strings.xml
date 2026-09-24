@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Vibeclip</string>
+    <string name="title_activity_main">Vibeclip</string>
+    <string name="package_name">com.vibeclip.app</string>
+    <string name="custom_url_scheme">com.vibeclip.app</string>
+</resources>

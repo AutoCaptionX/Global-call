@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Global Call - Advanced WebRTC Audio & Video Calling PWA</title>
+    <meta name="description" content="A highly advanced, modern, and premium WebRTC audio-video calling PWA with high-quality Opus codec and ultra-low latency." />
+    <meta property="og:title" content="Global Call - WebRTC PWA" />
+    <meta property="og:description" content="A highly advanced, modern, and premium WebRTC audio-video calling PWA with high-quality Opus codec and ultra-low latency." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    
+    <!-- PWA Primary Meta Tags -->
+    <meta name="theme-color" content="#09090b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Global Call" />
+    
+    <!-- App Icons -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    
+    <!-- Early PWA Capturing Script -->
+    <script>
+      window.deferredPrompt = null;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.deferredPrompt = e;
+        if (window.onDeferredPromptReceived) {
+          window.onDeferredPromptReceived(e);
+        }
+      });
+      window.addEventListener('appinstalled', () => {
+        window.deferredPrompt = null;
+        if (window.onAppInstalled) {
+          window.onAppInstalled();
+        }
+      });
+    </script>
+    
+    <!-- Preload Google reCAPTCHA API -->
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+
+    <style>body{color:#f4f4f5;background-color:#09090b;margin:0;padding:0;font-family:Plus Jakarta Sans,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}</style>
+    <script type="module" crossorigin src="/assets/index-9AWb_wX9.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CSvTMgm0.css">
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
+  <body class="bg-zinc-950 text-zinc-50 antialiased selection:bg-teal-500/30 selection:text-teal-200">
+    <div id="root"></div>
+  </body>
+</html>
+

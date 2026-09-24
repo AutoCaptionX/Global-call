@@ -1,0 +1,6 @@
+{
+  "name": "Global Call",
+  "description": "An advanced, modern, and premium WebRTC audio-video calling PWA with high-quality Opus codec and offline support.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

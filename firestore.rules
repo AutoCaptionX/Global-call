@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global security helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserPhone() {
+      return request.auth.token.phone_number;
+    }
+
+    // Users collection rules
+    match /users/{phoneNumber} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && (getUserPhone() == phoneNumber || request.auth.uid == request.resource.data.uid);
+    }
+
+    // Friends subcollection rules
+    match /users/{phoneNumber}/friends/{friendPhoneNumber} {
+      allow read, write: if isSignedIn() && getUserPhone() == phoneNumber;
+    }
+
+    // Chats collection rules
+    match /chats/{roomId} {
+      allow read, write: if isSignedIn() && (
+        roomId.indexOf(getUserPhone()) >= 0
+      );
+      
+      match /messages/{messageId} {
+        allow read, write: if isSignedIn() && (
+          roomId.indexOf(getUserPhone()) >= 0
+        );
+      }
+    }
+
+    // Calls collection rules
+    match /calls/{callId} {
+      allow read: if isSignedIn() && (
+        resource.data.caller == getUserPhone() || 
+        resource.data.recipient == getUserPhone()
+      );
+      
+      allow create: if isSignedIn() && (
+        request.resource.data.caller == getUserPhone()
+      );
+      
+      allow update: if isSignedIn() && (
+        resource.data.caller == getUserPhone() || 
+        resource.data.recipient == getUserPhone()
+      );
+      
+      allow delete: if isSignedIn() && (
+        resource.data.caller == getUserPhone() || 
+        resource.data.recipient == getUserPhone()
+      );
+    }
+  }
+}

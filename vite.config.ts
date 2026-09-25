@@ -6,8 +6,7 @@ import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
-  const isGitHubPages = process.env.GITHUB_ACTIONS === 'true' || process.env.GITHUB_PAGES === 'true';
-  const base = isGitHubPages ? '/Global-call/' : '/';
+  const base = './';
 
   return {
     base,
@@ -19,15 +18,15 @@ export default defineConfig(() => {
         injectRegister: 'auto',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
         manifest: {
-          id: base,
+          id: '/',
           name: 'Global Call - High Quality WebRTC Calling',
           short_name: 'Global Call',
           description: 'An advanced, modern, and premium WebRTC audio-video calling Progressive Web App.',
           theme_color: '#09090b',
           background_color: '#09090b',
           display: 'standalone',
-          start_url: base,
-          scope: base,
+          start_url: '.',
+          scope: '.',
           orientation: 'portrait',
           icons: [
             {

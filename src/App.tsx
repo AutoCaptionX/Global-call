@@ -2141,11 +2141,11 @@ export default function App() {
                         updatedAt: serverTimestamp()
                       }, { merge: true });
                       console.log("Successfully stored user profile with country details on registration sync!");
-                    } catch (err) {
+                      setIsProfileSetupDone(true);
+                    } catch (err: any) {
                       console.error("Error storing user profile on registration sync:", err);
+                      alert("Error saving profile details to Firestore: " + (err?.message || err));
                     }
-
-                    setIsProfileSetupDone(true);
                   }}
                   className="w-full mt-4 py-3.5 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-zinc-950 font-bold text-sm shadow-lg shadow-teal-500/10 transition active:scale-95 cursor-pointer"
                 >

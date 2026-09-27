@@ -651,7 +651,7 @@ export default function App() {
             console.log("Using active Service Worker registration for FCM:", registration.scope);
           } else {
             console.log("Registering fallback FCM Service Worker...");
-            registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+            registration = await navigator.serviceWorker.register('firebase-messaging-sw.js');
             console.log("Fallback FCM Service Worker registered with scope:", registration.scope);
           }
           

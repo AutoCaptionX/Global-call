@@ -904,6 +904,7 @@ export default function App() {
       
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
+        localVideoRef.current.play().catch(e => console.warn("Local video play failed:", e));
       }
       return true;
     } catch (e) {
@@ -916,6 +917,7 @@ export default function App() {
         localStreamRef.current = fallbackStream;
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = fallbackStream;
+          localVideoRef.current.play().catch(e => console.warn("Local fallback video play failed:", e));
         }
         return true;
       } catch (fallbackErr) {
@@ -950,8 +952,23 @@ export default function App() {
     }
 
     pc.ontrack = (event) => {
-      if (remoteVideoRef.current && event.streams[0]) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+      console.log("WebRTC: Remote track received", event.track.kind);
+      if (remoteVideoRef.current) {
+        if (event.streams && event.streams[0]) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+        } else {
+          let stream = remoteVideoRef.current.srcObject as MediaStream;
+          if (!stream || !(stream instanceof MediaStream)) {
+            stream = new MediaStream();
+            remoteVideoRef.current.srcObject = stream;
+          }
+          stream.addTrack(event.track);
+        }
+        
+        // Force the browser's video rendering engine to immediately start decoding the stream
+        remoteVideoRef.current.play().catch(err => {
+          console.warn("Remote stream play kickstart failed or was blocked by autoplay constraints:", err);
+        });
       }
     };
 
@@ -1820,6 +1837,13 @@ export default function App() {
       peerConnectionRef.current = null;
     }
 
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+
     if (currentCallPartner) {
       const status = callState === 'connected' ? 'completed' : 'missed';
       addRecentCall({
@@ -2260,10 +2284,10 @@ export default function App() {
                     <button
                       onClick={() => startCall(activeChatFriend, 'audio')}
                       disabled={blockedUsers.includes(activeChatFriend.phoneNumber)}
-                      className="p-2.5 rounded-xl bg-zinc-850 hover:bg-zinc-800 text-teal-400 border border-teal-500/5 transition active:scale-95 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
-                      title={blockedUsers.includes(activeChatFriend.phoneNumber) ? "Blocked" : "Start Audio Call"}
+                      className="p-2.5 rounded-xl bg-zinc-850 hover:bg-zinc-800 text-teal-400 border border-zinc-800/40 hover:border-teal-500/30 transition active:scale-95 disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                      title={blockedUsers.includes(activeChatFriend.phoneNumber) ? "Blocked" : "Start Audio Call (Voice Call)"}
                     >
-                      <Mic size={14} />
+                      <Phone size={13} />
                     </button>
                     
                     <button
@@ -2586,9 +2610,9 @@ export default function App() {
                               <button
                                 onClick={() => startCall(friend, 'audio')}
                                 className="p-2.5 rounded-xl bg-zinc-850 hover:bg-zinc-800 text-teal-400 border border-teal-500/5 transition active:scale-95 cursor-pointer"
-                                title="Start Audio Call"
+                                title="Start Audio Call (Voice Call)"
                               >
-                                <Mic size={14} />
+                                <Phone size={13} />
                               </button>
                               
                               <button

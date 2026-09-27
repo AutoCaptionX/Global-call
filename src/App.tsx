@@ -1949,9 +1949,9 @@ export default function App() {
       
       {/* Offline Banner */}
       {!isOnline && (
-        <div className="bg-amber-600 px-4 py-2 text-center text-sm font-semibold flex items-center justify-center gap-2 z-50">
-          <WifiOff size={16} />
-          <span>Network connection is unavailable. Cached offline PWA credentials are active.</span>
+        <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-center text-[11px] sm:text-xs font-bold flex items-center justify-center gap-2 z-50 shadow-lg text-zinc-950">
+          <WifiOff size={15} className="text-zinc-950 animate-bounce" />
+          <span>नेटवर्क अनुपलब्ध है। Cloud Firestore ऑफ़लाइन कैश सक्रिय है - आपके परिवर्तन सुरक्षित हैं और स्वतः सिंक हो जाएंगे! (Operating in resilient offline cache mode)</span>
         </div>
       )}
 
@@ -3180,7 +3180,7 @@ export default function App() {
           {/* Central Canvas Viewport */}
           <div className="relative flex-grow flex items-center justify-center z-10">
             {callState === 'connected' ? (
-              <div className="relative w-full h-full max-w-4xl max-h-[70vh] rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 shadow-2xl flex items-center justify-center">
+              <div className="relative w-full h-full max-w-4xl max-h-[70vh] rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 shadow-2xl flex items-center justify-center animate-scale-in">
                 
                 {/* REMOTE VIDEO FEED */}
                 <video

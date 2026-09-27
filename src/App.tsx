@@ -546,7 +546,17 @@ export default function App() {
             sound.startRingtone();
 
             // Prepare local media and trigger peer connection in recipient mode
-            await prepareLocalStream(data.callType || "video");
+            const hasMedia = await prepareLocalStream(data.callType || "video");
+            if (!hasMedia) {
+              sound.stopRingtone();
+              try {
+                await updateDoc(incomingCallDocRef, { status: "rejected" });
+              } catch (e) {}
+              alert("Incoming call failed: Camera/Microphone access was denied. Please allow media permissions in your browser settings.");
+              setCallState("idle");
+              setCurrentCallPartner(null);
+              return;
+            }
             createPeerConnection(partnerObj, false);
 
             if (data.offer) {
@@ -874,7 +884,7 @@ export default function App() {
     }
   };
 
-  const prepareLocalStream = async (type: 'audio' | 'video') => {
+  const prepareLocalStream = async (type: 'audio' | 'video'): Promise<boolean> => {
     try {
       const constraints = {
         audio: {
@@ -895,6 +905,7 @@ export default function App() {
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
+      return true;
     } catch (e) {
       console.warn('Error getting media devices with advanced low-bandwidth constraints, falling back:', e);
       try {
@@ -906,8 +917,10 @@ export default function App() {
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = fallbackStream;
         }
+        return true;
       } catch (fallbackErr) {
         console.error('Fallback media devices gather failed:', fallbackErr);
+        return false;
       }
     }
   };
@@ -1585,7 +1598,15 @@ export default function App() {
     setCallState('dialing');
     sound.startDialTone();
 
-    await prepareLocalStream(type);
+    const hasMedia = await prepareLocalStream(type);
+    if (!hasMedia) {
+      sound.stopDialTone();
+      alert(`Permission Denied: Camera/Microphone access is required to start a call. Please allow media permissions in your browser settings.`);
+      setCallState('idle');
+      setCurrentCallPartner(null);
+      return;
+    }
+    
     createPeerConnection(friend, true);
 
     const offer = await peerConnectionRef.current?.createOffer({
@@ -2311,9 +2332,17 @@ export default function App() {
                             ) : (
                               <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
                             )}
-                            <span className={`text-[8px] mt-1 block text-right font-mono ${isMe ? 'text-teal-900/80' : 'text-zinc-500'}`}>
-                              {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
+                            <div className="flex items-center justify-end gap-1 mt-1">
+                              <span className={`text-[8.5px] font-mono ${isMe ? 'text-teal-950/70' : 'text-zinc-500'}`}>
+                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                              {isMe && (
+                                <span className="flex items-center text-teal-950" title="Delivered & Read">
+                                  <Check size={9} strokeWidth={3.5} />
+                                  <Check size={9} strokeWidth={3.5} className="-ml-1" />
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       );
@@ -3199,23 +3228,25 @@ export default function App() {
               </div>
             ) : (
               /* OUTGOING DIAL / INCOMING RING */
-              <div className="text-center space-y-5">
+              <div className="text-center space-y-6">
                 <div className="relative inline-block">
-                  <div className="absolute inset-0 bg-teal-400/10 rounded-full animate-ping scale-125" />
-                  <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-teal-500 to-blue-500 flex items-center justify-center text-zinc-950 font-bold text-3xl shadow-xl border-4 border-zinc-950 relative z-10">
+                  {/* Status rings */}
+                  <div className="absolute inset-0 bg-teal-400/20 rounded-full animate-ping scale-150 duration-1000" />
+                  <div className="absolute inset-0 bg-teal-500/10 rounded-full animate-pulse scale-125" />
+                  <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-teal-500 to-cyan-500 flex items-center justify-center text-zinc-950 font-black text-3xl shadow-2xl border-4 border-zinc-950 relative z-10 animate-pulse">
                     {currentCallPartner.name.charAt(0).toUpperCase()}
                   </div>
                 </div>
 
                 <div>
-                  <h3 className="font-bold text-xl text-zinc-100">{currentCallPartner.name}</h3>
-                  <span className="text-xs text-zinc-500 font-mono mt-1 block">{currentCallPartner.phoneNumber}</span>
+                  <h3 className="font-bold text-xl text-zinc-100 tracking-tight">{currentCallPartner.name}</h3>
+                  <span className="text-xs text-zinc-500 font-mono mt-1.5 block">{currentCallPartner.phoneNumber}</span>
                 </div>
 
-                <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-teal-400">
-                  <RefreshCw className="animate-spin text-teal-400" size={14} />
-                  <span>
-                    {callState === 'dialing' ? 'Dialing...' : 'Ringing...'}
+                <div className="flex items-center justify-center gap-2 text-xs font-bold text-teal-400 bg-teal-500/10 px-4 py-2 rounded-full max-w-max mx-auto shadow-sm border border-teal-500/15 animate-pulse">
+                  <RefreshCw className="animate-spin text-teal-400" size={12} />
+                  <span className="tracking-wide">
+                    {callState === 'dialing' ? 'Calling...' : 'Ringing...'}
                   </span>
                 </div>
               </div>

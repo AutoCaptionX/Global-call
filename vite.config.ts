@@ -9,7 +9,7 @@ export default defineConfig(() => {
   const base = './';
 
   return {
-    base,
+    base: './', // यह लाइन बहुत जरूरी है
     plugins: [
       react(),
       tailwindcss(),

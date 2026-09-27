@@ -5,7 +5,7 @@ import {
   RotateCcw, Info, ChevronRight, User, Globe, AlertCircle, X, Shield, 
   RefreshCw, Search, ArrowRight, ExternalLink, Moon, Sparkles,
   ArrowUpRight, ArrowDownLeft, PhoneMissed, Trash2, Clock, Upload, Edit, LogOut,
-  Volume2, VolumeX, Plus, MoreVertical
+  Volume2, VolumeX, Plus, MoreVertical, Battery, BatteryCharging, BatteryLow
 } from 'lucide-react';
 import { sound } from './audio';
 import { ALL_COUNTRIES, Country } from './countries';
@@ -127,6 +127,8 @@ export default function App() {
   const [engineMode, setEngineMode] = useState<'demo' | 'firebase'>('firebase');
   const [userPhone, setUserPhone] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [batteryLevel, setBatteryLevel] = useState<number>(88); // 88% default testable fallback
+  const [isCharging, setIsCharging] = useState<boolean>(false);
   
   // --- Dashboard Tab State ---
   const [dashboardTab, setDashboardTab] = useState<'friends' | 'recents' | 'recordings'>('friends');
@@ -397,6 +399,36 @@ export default function App() {
       stopCallDuration();
       if (countdownIntervalRef.current) {
         clearInterval(countdownIntervalRef.current);
+      }
+    };
+  }, []);
+  
+  // --- Sync real-time Battery Status API ---
+  useEffect(() => {
+    let batteryObj: any = null;
+
+    const updateBattery = () => {
+      if (batteryObj) {
+        setBatteryLevel(Math.round(batteryObj.level * 100));
+        setIsCharging(batteryObj.charging);
+      }
+    };
+
+    if (typeof navigator !== 'undefined' && 'getBattery' in navigator) {
+      (navigator as any).getBattery().then((battery: any) => {
+        batteryObj = battery;
+        updateBattery();
+        battery.addEventListener('levelchange', updateBattery);
+        battery.addEventListener('chargingchange', updateBattery);
+      }).catch((e: any) => {
+        console.warn("Battery status API error:", e);
+      });
+    }
+
+    return () => {
+      if (batteryObj) {
+        batteryObj.removeEventListener('levelchange', updateBattery);
+        batteryObj.removeEventListener('chargingchange', updateBattery);
       }
     };
   }, []);
@@ -3149,6 +3181,19 @@ export default function App() {
                     <span>Bandwidth</span>
                     <span className="text-teal-400 font-bold">{stats.bandwidth}</span>
                   </div>
+                  <div className="flex justify-between gap-5 border-t border-zinc-800/80 pt-1 mt-1 items-center">
+                    <span>Device Battery</span>
+                    <span className="text-teal-400 font-bold flex items-center gap-1 font-sans">
+                      {isCharging ? (
+                        <BatteryCharging size={11} className="text-emerald-400 animate-pulse" />
+                      ) : batteryLevel <= 20 ? (
+                        <BatteryLow size={11} className="text-rose-400 animate-bounce" />
+                      ) : (
+                        <Battery size={11} className="text-teal-400" />
+                      )}
+                      <span>{batteryLevel}%</span>
+                    </span>
+                  </div>
                 </div>
 
               </div>
@@ -3399,6 +3444,20 @@ export default function App() {
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-zinc-500 font-medium">Verified Phone</span>
                     <span className="font-semibold font-mono text-teal-400">{userPhone}</span>
+                  </div>
+                  <div className="h-[1px] bg-zinc-850" />
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-zinc-500 font-medium">Device Battery</span>
+                    <span className="font-semibold text-teal-400 flex items-center gap-1.5">
+                      {isCharging ? (
+                        <BatteryCharging size={13} className="text-emerald-400 animate-pulse" />
+                      ) : batteryLevel <= 20 ? (
+                        <BatteryLow size={13} className="text-rose-400 animate-bounce" />
+                      ) : (
+                        <Battery size={13} className="text-teal-400" />
+                      )}
+                      <span>{batteryLevel}% {isCharging && "(Charging)"}</span>
+                    </span>
                   </div>
                 </div>
               </div>

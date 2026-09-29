@@ -43,8 +43,8 @@ service cloud.firestore {
     // Calls collection rules
     match /calls/{callId} {
       allow read: if isSignedIn() && (
-        resource.data.caller == getUserPhone() || 
-        resource.data.recipient == getUserPhone()
+        callId == getUserPhone() ||
+        (resource != null && (resource.data.caller == getUserPhone() || resource.data.recipient == getUserPhone()))
       );
       
       allow create: if isSignedIn() && (

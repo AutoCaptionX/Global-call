@@ -325,11 +325,13 @@ export default function App() {
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const durationIntervalRef = useRef<any>(null);
   const recaptchaVerifierRef = useRef<any>(null);
   const countdownIntervalRef = useRef<any>(null);
+  const processedCandidatesRef = useRef<Set<string>>(new Set());
 
   // --- Detect Environment on Mount ---
   useEffect(() => {
@@ -459,9 +461,32 @@ export default function App() {
           bandwidth: `Adaptive ${(1.2 + Math.random() * 0.4).toFixed(2)} Mbps`
         }));
       }, 1000);
+
+      // Force-attach streams to HTML video elements once connected layout mounts
+      const mediaAttachTimeout = setTimeout(() => {
+        console.log("WebRTC: Force-attaching local and remote streams in connected state...");
+        if (localVideoRef.current && localStreamRef.current) {
+          localVideoRef.current.srcObject = localStreamRef.current;
+          localVideoRef.current.play().catch(e => console.warn("Local play kickstart failed:", e));
+        }
+        if (remoteVideoRef.current && remoteStreamRef.current) {
+          remoteVideoRef.current.srcObject = remoteStreamRef.current;
+          remoteVideoRef.current.play().catch(e => console.warn("Remote play kickstart failed:", e));
+        }
+      }, 350);
+
+      return () => {
+        clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = null;
+        clearTimeout(mediaAttachTimeout);
+      };
     } else {
       stopCallDuration();
       setCallDuration(0);
+      if (callState === 'idle') {
+        remoteStreamRef.current = null;
+        processedCandidatesRef.current.clear();
+      }
     }
   }, [callState]);
 
@@ -564,6 +589,20 @@ export default function App() {
                 await peerConnectionRef.current?.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.offer)));
                 // Transition status to ringing in Firestore to notify caller that recipient's phone is now ringing
                 await updateDoc(incomingCallDocRef, { status: "ringing" });
+
+                // Process any early caller candidates that have already been stored
+                if (data.callerCandidates && Array.isArray(data.callerCandidates)) {
+                  for (const candStr of data.callerCandidates) {
+                    if (processedCandidatesRef.current.has(candStr)) continue;
+                    processedCandidatesRef.current.add(candStr);
+                    try {
+                      const cand = JSON.parse(candStr);
+                      await peerConnectionRef.current?.addIceCandidate(new RTCIceCandidate(cand));
+                    } catch (e) {
+                      console.warn("Error applying early caller candidate:", e);
+                    }
+                  }
+                }
               } catch (e) {
                 console.error("Error setting remote description from caller offer:", e);
               }
@@ -575,9 +614,11 @@ export default function App() {
           }
         }
 
-        // Expose caller ICE candidates to our recipient peer connection
-        if (peerConnectionRef.current && data.callerCandidates && Array.isArray(data.callerCandidates)) {
+        // Expose caller ICE candidates to our recipient peer connection ONLY if remote description is loaded
+        if (peerConnectionRef.current?.remoteDescription && data.callerCandidates && Array.isArray(data.callerCandidates)) {
           for (const candStr of data.callerCandidates) {
+            if (processedCandidatesRef.current.has(candStr)) continue;
+            processedCandidatesRef.current.add(candStr);
             try {
               const cand = JSON.parse(candStr);
               await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand));
@@ -656,7 +697,7 @@ export default function App() {
     };
   }, [isLoggedIn, friends.length]);
 
-  // --- Real-time messages sync ---
+  // --- Real-time messages sync & delivery status updater ---
   useEffect(() => {
     if (!activeChatFriend || !isLoggedIn) {
       setChatMessages([]);
@@ -674,6 +715,18 @@ export default function App() {
         ...d.data()
       }));
       setChatMessages(msgs);
+
+      // Automatically update status of received messages to 'read' if we are the recipient
+      snapshot.docs.forEach(async (docSnap) => {
+        const data = docSnap.data();
+        if (data.sender === activeChatFriend.phoneNumber && data.recipient === myFullPhone && data.status !== 'read') {
+          try {
+            await updateDoc(docSnap.ref, { status: 'read' });
+          } catch (e) {
+            console.warn("Could not mark message as read:", e);
+          }
+        }
+      });
     });
     return () => unsubscribe();
   }, [activeChatFriend, isLoggedIn, userPhone, selectedCountry]);
@@ -785,7 +838,8 @@ export default function App() {
       text: type === 'voice' ? '' : text,
       type: type,
       voiceUrl: voiceUrl || '',
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      status: 'sent'
     };
 
     if (engineMode === 'demo') {
@@ -953,21 +1007,31 @@ export default function App() {
 
     pc.ontrack = (event) => {
       console.log("WebRTC: Remote track received", event.track.kind);
-      if (remoteVideoRef.current) {
+      
+      // Initialize remote stream ref if not loaded yet
+      if (!remoteStreamRef.current) {
         if (event.streams && event.streams[0]) {
-          remoteVideoRef.current.srcObject = event.streams[0];
+          remoteStreamRef.current = event.streams[0];
         } else {
-          let stream = remoteVideoRef.current.srcObject as MediaStream;
-          if (!stream || !(stream instanceof MediaStream)) {
-            stream = new MediaStream();
-            remoteVideoRef.current.srcObject = stream;
-          }
-          stream.addTrack(event.track);
+          remoteStreamRef.current = new MediaStream();
         }
-        
-        // Force the browser's video rendering engine to immediately start decoding the stream
+      }
+
+      if (event.streams && event.streams[0]) {
+        event.streams[0].getTracks().forEach(t => {
+          if (!remoteStreamRef.current?.getTracks().includes(t)) {
+            remoteStreamRef.current?.addTrack(t);
+          }
+        });
+      } else {
+        remoteStreamRef.current.addTrack(event.track);
+      }
+
+      // If remoteVideoRef is mounted right now, update its stream immediately
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStreamRef.current;
         remoteVideoRef.current.play().catch(err => {
-          console.warn("Remote stream play kickstart failed or was blocked by autoplay constraints:", err);
+          console.warn("Remote stream play kickstart failed:", err);
         });
       }
     };
@@ -986,6 +1050,10 @@ export default function App() {
           console.error("Error setting ICE candidate:", e);
         }
       }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log("WebRTC: Peer connection state is now:", pc.connectionState);
     };
   };
 
@@ -1704,6 +1772,20 @@ export default function App() {
           if (data.answer) {
             try {
               await peerConnectionRef.current?.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.answer)));
+
+              // Process any early recipient candidates that have already been stored
+              if (data.recipientCandidates && Array.isArray(data.recipientCandidates)) {
+                for (const candStr of data.recipientCandidates) {
+                  if (processedCandidatesRef.current.has(candStr)) continue;
+                  processedCandidatesRef.current.add(candStr);
+                  try {
+                    const cand = JSON.parse(candStr);
+                    await peerConnectionRef.current?.addIceCandidate(new RTCIceCandidate(cand));
+                  } catch (e) {
+                    console.warn("Error applying early recipient candidate:", e);
+                  }
+                }
+              }
             } catch (e) {
               console.error("Error setting remote description from recipient answer:", e);
             }
@@ -1714,8 +1796,10 @@ export default function App() {
         unsubscribeOutgoingCall();
       }
 
-      if (peerConnectionRef.current && data.recipientCandidates && Array.isArray(data.recipientCandidates)) {
+      if (peerConnectionRef.current?.remoteDescription && data.recipientCandidates && Array.isArray(data.recipientCandidates)) {
         for (const candStr of data.recipientCandidates) {
+          if (processedCandidatesRef.current.has(candStr)) continue;
+          processedCandidatesRef.current.add(candStr);
           try {
             const cand = JSON.parse(candStr);
             await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand));
@@ -2356,14 +2440,22 @@ export default function App() {
                             ) : (
                               <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
                             )}
-                            <div className="flex items-center justify-end gap-1 mt-1">
+                             <div className="flex items-center justify-end gap-1 mt-1">
                               <span className={`text-[8.5px] font-mono ${isMe ? 'text-teal-950/70' : 'text-zinc-500'}`}>
                                 {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </span>
                               {isMe && (
-                                <span className="flex items-center text-teal-950" title="Delivered & Read">
-                                  <Check size={9} strokeWidth={3.5} />
-                                  <Check size={9} strokeWidth={3.5} className="-ml-1" />
+                                <span className="flex items-center" title={msg.status === 'read' ? 'Read' : 'Sent'}>
+                                  {msg.status === 'read' ? (
+                                    <span className="flex items-center text-teal-950">
+                                      <Check size={9} strokeWidth={3.5} />
+                                      <Check size={9} strokeWidth={3.5} className="-ml-1" />
+                                    </span>
+                                  ) : (
+                                    <span className="text-zinc-500">
+                                      <Check size={9} strokeWidth={3.5} />
+                                    </span>
+                                  )}
                                 </span>
                               )}
                             </div>

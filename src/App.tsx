@@ -289,6 +289,7 @@ export default function App() {
   const [callState, setCallState] = useState<'idle' | 'dialing' | 'ringing' | 'connected'>('idle');
   const [callType, setCallType] = useState<'audio' | 'video'>('video');
   const [currentCallPartner, setCurrentCallPartner] = useState<Friend | null>(null);
+  const [remoteStreamLoaded, setRemoteStreamLoaded] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -486,6 +487,7 @@ export default function App() {
       if (callState === 'idle') {
         remoteStreamRef.current = null;
         processedCandidatesRef.current.clear();
+        setRemoteStreamLoaded(false);
       }
     }
   }, [callState]);
@@ -1026,6 +1028,9 @@ export default function App() {
       } else {
         remoteStreamRef.current.addTrack(event.track);
       }
+
+      // Explicitly tell React state that the remote stream has been loaded/received
+      setRemoteStreamLoaded(true);
 
       // If remoteVideoRef is mounted right now, update its stream immediately
       if (remoteVideoRef.current) {
@@ -3283,7 +3288,7 @@ export default function App() {
                 />
 
                 {/* Backup Audio Only Interface */}
-                {(!remoteVideoRef.current?.srcObject || callType === 'audio') && (
+                {(!remoteStreamLoaded || callType === 'audio') && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900/90 space-y-4">
                     <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-teal-500 to-cyan-500 flex items-center justify-center text-zinc-950 font-bold text-3xl">
                       {currentCallPartner.name.charAt(0).toUpperCase()}
@@ -3344,25 +3349,43 @@ export default function App() {
               </div>
             ) : (
               /* OUTGOING DIAL / INCOMING RING */
-              <div className="text-center space-y-6">
+              <div className="text-center space-y-8 animate-fadeIn">
                 <div className="relative inline-block">
-                  {/* Status rings */}
-                  <div className="absolute inset-0 bg-teal-400/20 rounded-full animate-ping scale-150 duration-1000" />
-                  <div className="absolute inset-0 bg-teal-500/10 rounded-full animate-pulse scale-125" />
-                  <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-teal-500 to-cyan-500 flex items-center justify-center text-zinc-950 font-black text-3xl shadow-2xl border-4 border-zinc-950 relative z-10 animate-pulse">
-                    {currentCallPartner.name.charAt(0).toUpperCase()}
+                  {/* Status rings - multiple pulsing rings for powerful effect! */}
+                  <div className="absolute inset-0 bg-teal-400/25 rounded-full animate-ping scale-[1.75] duration-1000 opacity-65" />
+                  <div className="absolute inset-0 bg-teal-500/20 rounded-full animate-ping scale-[1.4] duration-1000 delay-300 opacity-80" />
+                  <div className="absolute inset-0 bg-teal-500/15 rounded-full animate-pulse scale-125" />
+                  
+                  {/* Outer glowing border */}
+                  <div className="w-28 h-28 rounded-full bg-gradient-to-tr from-teal-500 via-cyan-400 to-emerald-400 p-1 animate-pulse relative z-10 shadow-[0_0_40px_rgba(20,184,166,0.3)] flex items-center justify-center">
+                    <div className="w-full h-full bg-zinc-950 rounded-full flex items-center justify-center overflow-hidden">
+                      {currentCallPartner.profileImage ? (
+                        <img 
+                          src={currentCallPartner.profileImage} 
+                          alt={currentCallPartner.name} 
+                          className="w-full h-full object-cover" 
+                        />
+                      ) : (
+                        <span className="text-zinc-100 font-black text-4xl">
+                          {currentCallPartner.name.charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <div>
-                  <h3 className="font-bold text-xl text-zinc-100 tracking-tight">{currentCallPartner.name}</h3>
-                  <span className="text-xs text-zinc-500 font-mono mt-1.5 block">{currentCallPartner.phoneNumber}</span>
+                <div className="space-y-2">
+                  <h3 className="font-bold text-2xl text-zinc-50 tracking-tight">{currentCallPartner.name}</h3>
+                  <span className="text-xs text-zinc-500 font-mono tracking-wider block">{currentCallPartner.phoneNumber}</span>
                 </div>
 
-                <div className="flex items-center justify-center gap-2 text-xs font-bold text-teal-400 bg-teal-500/10 px-4 py-2 rounded-full max-w-max mx-auto shadow-sm border border-teal-500/15 animate-pulse">
-                  <RefreshCw className="animate-spin text-teal-400" size={12} />
-                  <span className="tracking-wide">
-                    {callState === 'dialing' ? 'Calling...' : 'Ringing...'}
+                <div className="flex items-center justify-center gap-2 text-xs font-black text-teal-400 bg-teal-500/10 border border-teal-500/20 px-5 py-2.5 rounded-full max-w-max mx-auto shadow-lg shadow-teal-950/20 animate-pulse">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
+                  </span>
+                  <span className="tracking-widest uppercase text-[10px]">
+                    {callState === 'dialing' ? 'Dialing Secure Link...' : 'Incoming HD Video Call...'}
                   </span>
                 </div>
               </div>
@@ -3370,7 +3393,7 @@ export default function App() {
           </div>
 
           {/* Call Controllers */}
-          <div className="relative z-10 flex flex-col items-center gap-3 py-3">
+          <div className="relative z-10 flex flex-col items-center gap-4 py-4">
             
             {callState === 'connected' && (
               <span className="text-xs font-bold text-zinc-100 bg-zinc-900 border border-zinc-800 px-3 py-1 rounded-full font-mono">
@@ -3378,21 +3401,34 @@ export default function App() {
               </span>
             )}
 
-            <div className="flex items-center justify-center gap-3.5">
+            <div className="flex items-center justify-center gap-8">
               {callState === 'ringing' ? (
                 <>
-                  <button
-                    onClick={() => handleLocalHangup()}
-                    className="p-3.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow transition transform hover:scale-105"
-                  >
-                    <PhoneOff size={22} />
-                  </button>
-                  <button
-                    onClick={answerCall}
-                    className="p-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow transition transform hover:scale-105 animate-pulse"
-                  >
-                    <Phone size={22} />
-                  </button>
+                  {/* REJECT/DECLINE BUTTON */}
+                  <div className="flex flex-col items-center gap-2 animate-scale-in">
+                    <button
+                      onClick={() => handleLocalHangup()}
+                      className="w-16 h-16 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-2xl flex items-center justify-center transition-all duration-300 transform hover:scale-110 active:scale-95 border border-rose-500/35 relative group cursor-pointer"
+                    >
+                      {/* Pulsing glow ring */}
+                      <span className="absolute inset-0 rounded-full bg-rose-600/30 animate-ping group-hover:animate-none scale-110 duration-1000" />
+                      <PhoneOff size={24} />
+                    </button>
+                    <span className="text-[10px] text-rose-400 font-bold uppercase tracking-wider">Decline</span>
+                  </div>
+
+                  {/* ACCEPT/ANSWER BUTTON */}
+                  <div className="flex flex-col items-center gap-2 animate-scale-in">
+                    <button
+                      onClick={answerCall}
+                      className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-2xl flex items-center justify-center transition-all duration-300 transform hover:scale-110 active:scale-95 border border-emerald-400/35 relative group cursor-pointer"
+                    >
+                      {/* Pulsing glow ring */}
+                      <span className="absolute inset-0 rounded-full bg-emerald-500/35 animate-ping duration-1000 scale-125" />
+                      <Phone size={24} className="animate-bounce" />
+                    </button>
+                    <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Answer</span>
+                  </div>
                 </>
               ) : (
                 <>

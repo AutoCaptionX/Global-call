@@ -1994,34 +1994,57 @@ export default function App() {
       return;
     }
 
-    // Timeout helper (5 seconds)
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Search timeout')), 5000));
-
     let userExists = false;
     let foundUserData: any = null;
     let verifiedE164Phone = formattedPhone;
     let syncedName = newFriendName;
 
     try {
-      await Promise.race([
-        (async () => {
-          const docRef = doc(db, "users", formattedPhone);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            foundUserData = docSnap.data();
-            verifiedE164Phone = foundUserData.phoneNumber || formattedPhone;
+      // 5-second strict timeout promise
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Search timeout')), 5000));
+
+      const lookupPromise = (async () => {
+        // 1. Try formattedPhone doc lookup
+        const docRef = doc(db, "users", formattedPhone);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          foundUserData = docSnap.data();
+          verifiedE164Phone = foundUserData.phoneNumber || formattedPhone;
+          syncedName = foundUserData.name || newFriendName;
+          userExists = true;
+          return;
+        }
+
+        // 2. Try raw variants doc lookup
+        const variants = [
+          newFriendPhone,
+          cleanSearchDigits,
+          "+" + cleanSearchDigits,
+          newFriendCountry.code + cleanSearchDigits
+        ];
+        for (const v of variants) {
+          if (!v) continue;
+          const vRef = doc(db, "users", v);
+          const vSnap = await getDoc(vRef);
+          if (vSnap.exists()) {
+            foundUserData = vSnap.data();
+            verifiedE164Phone = vSnap.id;
             syncedName = foundUserData.name || newFriendName;
             userExists = true;
+            return;
           }
-        })(),
-        timeoutPromise
-      ]);
+        }
+      })();
+
+      await Promise.race([lookupPromise, timeoutPromise]);
     } catch (err) {
       console.warn("Search timed out or failed:", err);
+    } finally {
+      // Guaranteed stop of loading spinner
+      setIsSearchingFriend(false);
     }
 
     if (!userExists) {
-      setIsSearchingFriend(false);
       setAddFriendError("Friend not found, please check number");
       return;
     }
@@ -2075,8 +2098,6 @@ export default function App() {
     } catch (e) {
       console.error("Error storing friend in cloud Firestore:", e);
       setAddFriendError("Failed to add friend in cloud database.");
-    } finally {
-      setIsSearchingFriend(false);
     }
   };
 

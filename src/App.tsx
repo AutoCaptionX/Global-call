@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { sound } from './audio';
 import { ALL_COUNTRIES, Country } from './countries';
+import { QRCodeSVG } from 'qrcode.react';
 
 import { getAnalytics } from "firebase/analytics";
 import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, signOut } from "firebase/auth";
@@ -41,7 +42,12 @@ declare global {
   }
 }
 
-const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
+let analytics = null;
+try {
+  analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
+} catch (e) {
+  console.warn("Firebase Analytics is not supported in this iframe/preview sandbox:", e);
+}
 
 // --- Types ---
 interface Friend {
@@ -72,6 +78,48 @@ interface CallStats {
   fps: number;
   bandwidth: string;
 }
+
+// --- Safe localStorage wrapper to prevent security exceptions in sandboxed cross-origin iframes ---
+const safeLocalStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return window.localStorage.getItem(key);
+      }
+    } catch (e) {
+      console.warn(`localStorage.getItem blocked for key ${key}:`, e);
+    }
+    return null;
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(key, value);
+      }
+    } catch (e) {
+      console.warn(`localStorage.setItem blocked for key ${key}:`, e);
+    }
+  },
+  removeItem: (key: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(key);
+      }
+    } catch (e) {
+      console.warn(`localStorage.removeItem blocked for key ${key}:`, e);
+    }
+  },
+  clear: (): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.clear();
+      }
+    } catch (e) {
+      console.warn("localStorage.clear blocked:", e);
+    }
+  }
+};
+const localStorage = safeLocalStorage;
 
 // --- Robust Low-Bandwidth and Slow Connection Optimization Helpers ---
 const normalizePhoneToE164 = (phone: string, defaultCountryCode: string): string => {
@@ -129,6 +177,7 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [batteryLevel, setBatteryLevel] = useState<number>(88); // 88% default testable fallback
   const [isCharging, setIsCharging] = useState<boolean>(false);
+  const [showQrModal, setShowQrModal] = useState(false);
   
   // --- Dashboard Tab State ---
   const [dashboardTab, setDashboardTab] = useState<'friends' | 'recents' | 'recordings'>('friends');
@@ -159,6 +208,89 @@ export default function App() {
     if (saved) return JSON.parse(saved);
     return [];
   });
+
+  // --- Scheduled Calls States & Sync ---
+  const [scheduledCalls, setScheduledCalls] = useState<any[]>([]);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleTargetPhone, setScheduleTargetPhone] = useState('');
+  const [scheduleTargetName, setScheduleTargetName] = useState('');
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('');
+  const [scheduleCallType, setScheduleCallType] = useState<'audio' | 'video'>('audio');
+  const [scheduleNote, setScheduleNote] = useState('');
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setScheduledCalls([]);
+      return;
+    }
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+
+    const q = query(collection(db, "scheduled_calls"), where("senderUid", "==", uid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const calls = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setScheduledCalls(calls);
+    }, (err) => {
+      console.warn("Scheduled calls sync warning:", err);
+    });
+
+    return () => unsubscribe();
+  }, [isLoggedIn]);
+
+  const handleSaveScheduledCall = async () => {
+    if (!scheduleTargetPhone || !scheduleDate || !scheduleTime) {
+      alert("Please provide phone number, date, and time for the scheduled call.");
+      return;
+    }
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      alert("Please sign in first.");
+      return;
+    }
+
+    const formattedPhone = normalizePhoneToE164(scheduleTargetPhone, selectedCountry.code);
+    const targetFriend = friends.find(f => f.phoneNumber === formattedPhone);
+    const recipientName = targetFriend ? targetFriend.name : (scheduleTargetName || formattedPhone);
+
+    try {
+      await addDoc(collection(db, "scheduled_calls"), {
+        senderUid: uid,
+        senderPhone: userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone),
+        recipientPhone: formattedPhone,
+        recipientName: recipientName,
+        callType: scheduleCallType,
+        scheduledAt: `${scheduleDate}T${scheduleTime}`,
+        note: scheduleNote || 'Scheduled WebRTC Call',
+        status: 'scheduled',
+        createdAt: serverTimestamp()
+      });
+
+      setShowScheduleModal(false);
+      setScheduleTargetPhone('');
+      setScheduleTargetName('');
+      setScheduleDate('');
+      setScheduleTime('');
+      setScheduleNote('');
+      alert("Call scheduled successfully and saved to Firestore!");
+    } catch (err) {
+      console.error("Failed to save scheduled call:", err);
+      alert("Failed to schedule call.");
+    }
+  };
+
+  const handleDeleteScheduledCall = async (id: string) => {
+    if (confirm("Are you sure you want to cancel and delete this scheduled call?")) {
+      try {
+        await deleteDoc(doc(db, "scheduled_calls", id));
+      } catch (e) {
+        console.error("Failed to delete scheduled call:", e);
+      }
+    }
+  };
 
   const [callDirection, setCallDirection] = useState<'incoming' | 'outgoing'>('outgoing');
   
@@ -265,6 +397,9 @@ export default function App() {
   const [activeChatFriend, setActiveChatFriend] = useState<Friend | null>(null);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [typedMessage, setTypedMessage] = useState('');
+  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+  const typingTimeoutRef = useRef<any>(null);
+  const isTypingLocallyRef = useRef(false);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [recordedAudioChunks, setRecordedAudioChunks] = useState<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -310,6 +445,137 @@ export default function App() {
   const [showIOSGuide, setShowIOSGuide] = useState(false);
   const [logoTapCount, setLogoTapCount] = useState(0);
 
+  // --- Circular Cropper States ---
+  const [cropperSrc, setCropperSrc] = useState<string | null>(null);
+  const [cropScale, setCropScale] = useState(1);
+  const [cropPosition, setCropPosition] = useState({ x: 0, y: 0 });
+  const [isDraggingCrop, setIsDraggingCrop] = useState(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+
+  const handleCropMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingCrop(true);
+    dragStartRef.current = { x: e.clientX - cropPosition.x, y: e.clientY - cropPosition.y };
+  };
+
+  const handleCropMouseMove = (e: React.MouseEvent) => {
+    if (!isDraggingCrop) return;
+    const newX = e.clientX - dragStartRef.current.x;
+    const newY = e.clientY - dragStartRef.current.y;
+    setCropPosition({
+      x: Math.max(-120, Math.min(120, newX)),
+      y: Math.max(-120, Math.min(120, newY))
+    });
+  };
+
+  const handleCropMouseUp = () => {
+    setIsDraggingCrop(false);
+  };
+
+  const handleCropTouchStart = (e: React.TouchEvent) => {
+    if (e.touches[0]) {
+      setIsDraggingCrop(true);
+      dragStartRef.current = { 
+        x: e.touches[0].clientX - cropPosition.x, 
+        y: e.touches[0].clientY - cropPosition.y 
+      };
+    }
+  };
+
+  const handleCropTouchMove = (e: React.TouchEvent) => {
+    if (!isDraggingCrop || !e.touches[0]) return;
+    const newX = e.touches[0].clientX - dragStartRef.current.x;
+    const newY = e.touches[0].clientY - dragStartRef.current.y;
+    setCropPosition({
+      x: Math.max(-120, Math.min(120, newX)),
+      y: Math.max(-120, Math.min(120, newY))
+    });
+  };
+
+  const handleSaveCrop = () => {
+    if (!cropperSrc) return;
+    
+    const imageEl = new Image();
+    imageEl.crossOrigin = 'anonymous';
+    imageEl.src = cropperSrc;
+    imageEl.onload = async () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          setMyProfileImage(cropperSrc);
+          setCropperSrc(null);
+          return;
+        }
+
+        const size = 256;
+        canvas.width = size;
+        canvas.height = size;
+
+        ctx.fillStyle = '#09090b';
+        ctx.fillRect(0, 0, size, size);
+
+        const imgWidth = imageEl.width || size;
+        const imgHeight = imageEl.height || size;
+        const minDimension = Math.min(imgWidth, imgHeight);
+        
+        const srcSize = Math.max(1, minDimension / (cropScale || 1));
+        const srcX = (imgWidth - srcSize) / 2 - ((cropPosition.x || 0) / (cropScale || 1)) * (imgWidth / 200);
+        const srcY = (imgHeight - srcSize) / 2 - ((cropPosition.y || 0) / (cropScale || 1)) * (imgHeight / 200);
+
+        const finalSrcX = Math.max(0, Math.min(imgWidth - 1, srcX));
+        const finalSrcY = Math.max(0, Math.min(imgHeight - 1, srcY));
+        const finalSrcW = Math.max(1, Math.min(imgWidth - finalSrcX, srcSize));
+        const finalSrcH = Math.max(1, Math.min(imgHeight - finalSrcY, srcSize));
+
+        if (finalSrcW > 0 && finalSrcH > 0 && imgWidth > 0 && imgHeight > 0) {
+          ctx.drawImage(
+            imageEl,
+            finalSrcX,
+            finalSrcY,
+            finalSrcW,
+            finalSrcH,
+            0,
+            0,
+            size,
+            size
+          );
+        } else {
+          ctx.drawImage(imageEl, 0, 0, size, size);
+        }
+
+        const croppedBase64 = canvas.toDataURL('image/jpeg', 0.85);
+        setMyProfileImage(croppedBase64);
+        localStorage.setItem('global_call_profile_image', croppedBase64);
+
+        if (isLoggedIn) {
+          const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
+          try {
+            await setDoc(doc(db, "users", myFullPhone), {
+              profileImage: croppedBase64,
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+            console.log("Profile photo updated instantly in Firestore!");
+          } catch (err) {
+            console.error("Failed to instantly save profile photo to Firestore:", err);
+          }
+        }
+      } catch (err) {
+        console.error("Error saving cropped profile image:", err);
+        setMyProfileImage(cropperSrc);
+        localStorage.setItem('global_call_profile_image', cropperSrc);
+      } finally {
+        setCropperSrc(null);
+        setCropScale(1);
+        setCropPosition({ x: 0, y: 0 });
+      }
+    };
+    imageEl.onerror = () => {
+      setMyProfileImage(cropperSrc);
+      setCropperSrc(null);
+    };
+  };
+
   const handleLogoClick = () => {
     setLogoTapCount(prev => {
       const next = prev + 1;
@@ -336,75 +602,144 @@ export default function App() {
 
   // --- Detect Environment on Mount ---
   useEffect(() => {
-    // Detect Standalone PWA mode
-    const checkStandalone = window.matchMedia('(display-mode: standalone)').matches || 
-                            (window.navigator as any).standalone === true;
-    setIsStandalone(checkStandalone);
+    try {
+      // Detect Standalone PWA mode
+      const checkStandalone = (typeof window !== 'undefined' && window.matchMedia && typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches) || 
+                              (typeof window !== 'undefined' && (window.navigator as any).standalone === true);
+      setIsStandalone(!!checkStandalone);
 
-    // Prioritize loading saved country from local storage, or auto-detect from browser locale if none exists
-    const savedCountryName = localStorage.getItem('global_call_country_name');
-    if (savedCountryName) {
-      const matched = ALL_COUNTRIES.find(c => c.name === savedCountryName);
-      if (matched) {
-        setSelectedCountry(matched);
-        setNewFriendCountry(matched);
-      }
-    } else {
-      const locale = navigator.language || 'en-US';
-      const detectedCountryCode = locale.split('-')[1]?.toUpperCase();
-      if (detectedCountryCode) {
-        const matched = ALL_COUNTRIES.find(c => c.name.toUpperCase().includes(detectedCountryCode));
+      // Prioritize loading saved country from local storage, or auto-detect from browser locale if none exists
+      const savedCountryName = localStorage.getItem('global_call_country_name');
+      if (savedCountryName) {
+        const matched = ALL_COUNTRIES.find(c => c.name === savedCountryName);
         if (matched) {
           setSelectedCountry(matched);
           setNewFriendCountry(matched);
         }
+      } else {
+        const locale = String(navigator.language || 'en-US');
+        const parts = locale.split('-');
+        const detectedCountryCode = parts.length > 1 ? parts[1].toUpperCase() : '';
+        if (detectedCountryCode) {
+          const matched = ALL_COUNTRIES.find(c => c.name.toUpperCase().includes(detectedCountryCode));
+          if (matched) {
+            setSelectedCountry(matched);
+            setNewFriendCountry(matched);
+          }
+        }
       }
-    }
 
-    // Connectivity status listeners
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    // Check if the prompt was already captured by index.html script
-    if ((window as any).deferredPrompt) {
-      setDeferredPrompt((window as any).deferredPrompt);
-    }
-    (window as any).onDeferredPromptReceived = (e: any) => {
-      setDeferredPrompt(e);
-    };
-    (window as any).onAppInstalled = () => {
-      setIsStandalone(true);
-      setDeferredPrompt(null);
-    };
-
-    // PWA capture prompt fallback
-    const handleBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-
-    // Persisted login check
-    const savedPhone = localStorage.getItem('global_call_user_phone');
-    if (savedPhone) {
-       setUserPhone(savedPhone);
-       setIsLoggedIn(true);
-    }
-    loadSavedRecordings();
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-      if (channelRef.current) channelRef.current.close();
-      stopCallDuration();
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current);
+      // Connectivity status listeners safely registered with fallbacks
+      const handleOnline = () => setIsOnline(true);
+      const handleOffline = () => setIsOnline(false);
+      try {
+        if (typeof window !== 'undefined' && window.addEventListener) {
+          window.addEventListener('online', handleOnline);
+          window.addEventListener('offline', handleOffline);
+        }
+      } catch (eListeners) {
+        console.warn("Could not attach online/offline event listeners inside sandbox iframe:", eListeners);
       }
-    };
+
+      // Check if the prompt was already captured by index.html script
+      try {
+        if (typeof window !== 'undefined' && (window as any).deferredPrompt) {
+          setDeferredPrompt((window as any).deferredPrompt);
+        }
+      } catch (eDefPrompt) {
+        console.warn("Could not read deferredPrompt on window:", eDefPrompt);
+      }
+
+      try {
+        if (typeof window !== 'undefined') {
+          (window as any).onDeferredPromptReceived = (e: any) => {
+            setDeferredPrompt(e);
+          };
+          (window as any).onAppInstalled = () => {
+            setIsStandalone(true);
+            setDeferredPrompt(null);
+          };
+        }
+      } catch (ePWAProps) {
+        console.warn("Could not define onDeferredPromptReceived or onAppInstalled on window:", ePWAProps);
+      }
+
+      // PWA capture prompt fallback
+      const handleBeforeInstall = (e: Event) => {
+        e.preventDefault();
+        setDeferredPrompt(e);
+      };
+      try {
+        if (typeof window !== 'undefined' && window.addEventListener) {
+          window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+        }
+      } catch (eBeforeInstall) {
+        console.warn("Could not attach beforeinstallprompt listener:", eBeforeInstall);
+      }
+
+      // Persisted login check
+      const savedPhone = localStorage.getItem('global_call_user_phone');
+      if (savedPhone) {
+         setUserPhone(savedPhone);
+         setIsLoggedIn(true);
+      }
+      loadSavedRecordings();
+
+      return () => {
+        try {
+          if (typeof window !== 'undefined' && window.removeEventListener) {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+            window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+          }
+        } catch (eClean) {
+          console.warn("Failed to remove window event listeners during unmount:", eClean);
+        }
+        if (channelRef.current) {
+          try {
+            channelRef.current.close();
+          } catch (eBC) {}
+        }
+        stopCallDuration();
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+        }
+      };
+    } catch (err) {
+      console.warn("Error inside Mount Environment Detection useEffect:", err);
+    }
   }, []);
+
+  // Pre-warm reCAPTCHA verifier on load for instant OTP dispatch (saves ~2 seconds)
+  useEffect(() => {
+    if (isLoggedIn || engineMode === 'demo') return;
+
+    const prewarmRecaptcha = async () => {
+      try {
+        const container = document.getElementById('recaptcha-container');
+        if (!container) return;
+        
+        if (!recaptchaVerifierRef.current) {
+          console.log("Pre-warming invisible reCAPTCHA verifier...");
+          const verifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+            'size': 'invisible',
+            'callback': (response: any) => {
+              console.log("reCAPTCHA pre-warm solved successfully! Token:", response);
+            }
+          });
+          recaptchaVerifierRef.current = verifier;
+          await verifier.render();
+          console.log("reCAPTCHA verifier pre-warmed & rendered in background!");
+        }
+      } catch (err) {
+        console.warn("Failed to pre-warm reCAPTCHA verifier:", err);
+      }
+    };
+
+    // Wait a brief second after mounting to pre-warm
+    const timer = setTimeout(prewarmRecaptcha, 1500);
+    return () => clearTimeout(timer);
+  }, [isLoggedIn, engineMode]);
   
   // --- Sync real-time Battery Status API ---
   useEffect(() => {
@@ -503,17 +838,20 @@ export default function App() {
   useEffect(() => {
     if (!isLoggedIn) return;
 
-    // Use full phone number as Firestore doc ID
-    const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
+    // Use E.164 standardized phone number and UID
+    const formattedPhone = normalizePhoneToE164(userPhone, selectedCountry.code);
+    const uid = auth.currentUser?.uid;
+    const myFullPhone = formattedPhone;
 
     // 1. Sync / Register Profile in Firestore & set status to online
     const registerProfileAndSetPresence = async () => {
+      if (!uid) return;
       try {
-        await setDoc(doc(db, "users", myFullPhone), {
-          uid: auth.currentUser?.uid || "guest_" + Date.now(),
-          phoneNumber: myFullPhone,
+        await setDoc(doc(db, "users", uid), {
+          uid: uid,
+          phoneNumber: formattedPhone,
           name: myProfileName || "Guest User",
-          username: myUsername || "user_" + myFullPhone.slice(-4),
+          username: myUsername || "user_" + formattedPhone.slice(-4),
           avatarIdx: myAvatarIdx,
           profileImage: myProfileImage || "",
           bio: myBio || "Hey there! I am using Global Call.",
@@ -522,7 +860,7 @@ export default function App() {
           countryCode: selectedCountry.code,
           updatedAt: serverTimestamp()
         }, { merge: true });
-        console.log("Profile registered with country & online status set in Firestore for:", myFullPhone);
+        console.log("Profile registered with uid doc ID and E.164 phone:", uid, formattedPhone);
       } catch (err) {
         console.error("Firestore Profile/Presence sync failed:", err);
       }
@@ -533,7 +871,9 @@ export default function App() {
     // Set offline on tab/window closure
     const handleBeforeUnload = () => {
       try {
-        setDoc(doc(db, "users", myFullPhone), { status: "offline", updatedAt: serverTimestamp() }, { merge: true });
+        if (uid) {
+          setDoc(doc(db, "users", uid), { status: "offline", updatedAt: serverTimestamp() }, { merge: true });
+        }
       } catch (e) {}
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -648,8 +988,12 @@ export default function App() {
       return;
     }
 
-    const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
-    const friendsQuery = collection(db, "users", myFullPhone, "friends");
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setFriends([]);
+      return;
+    }
+    const friendsQuery = collection(db, "users", uid, "friends");
 
     const unsubscribe = onSnapshot(friendsQuery, (snapshot) => {
       const friendsData: Friend[] = [];
@@ -827,9 +1171,94 @@ export default function App() {
     };
   }, [isLoggedIn, engineMode]);
 
+  // --- Real-time Typing Status Helpers ---
+  const updateTypingStatus = async (isTyping: boolean) => {
+    if (!activeChatFriend || !isLoggedIn || engineMode === 'demo') return;
+    const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
+    const roomId = [myFullPhone, activeChatFriend.phoneNumber].sort().join('_');
+    try {
+      await setDoc(doc(db, "chats", roomId), {
+        typing: {
+          [myFullPhone]: isTyping
+        }
+      }, { merge: true });
+    } catch (e) {
+      console.warn("Could not update typing status in Firestore:", e);
+    }
+  };
+
+  const handleTypedMessageChange = (val: string) => {
+    setTypedMessage(val);
+    if (!activeChatFriend || !isLoggedIn || engineMode === 'demo') return;
+
+    if (!isTypingLocallyRef.current) {
+      isTypingLocallyRef.current = true;
+      updateTypingStatus(true);
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      isTypingLocallyRef.current = false;
+      updateTypingStatus(false);
+    }, 2000);
+  };
+
+  // Listen to remote user typing status
+  useEffect(() => {
+    if (!activeChatFriend || !isLoggedIn) {
+      setIsPartnerTyping(false);
+      return;
+    }
+    const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
+    const roomId = [myFullPhone, activeChatFriend.phoneNumber].sort().join('_');
+    const docRef = doc(db, "chats", roomId);
+    
+    const unsubscribe = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data.typing) {
+          setIsPartnerTyping(!!data.typing[activeChatFriend.phoneNumber]);
+        } else {
+          setIsPartnerTyping(false);
+        }
+      } else {
+        setIsPartnerTyping(false);
+      }
+    }, (error) => {
+      console.warn("Typing onSnapshot listener ignored or failed:", error);
+    });
+
+    return () => unsubscribe();
+  }, [activeChatFriend, isLoggedIn, userPhone, selectedCountry]);
+
+  // Clean up local typing state on unmount or partner change
+  useEffect(() => {
+    return () => {
+      if (isTypingLocallyRef.current) {
+        isTypingLocallyRef.current = false;
+        updateTypingStatus(false);
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, [activeChatFriend]);
+
   // --- Real-time Chat functions (sendMessage, voice recording) ---
   const sendMessage = async (text: string, type: 'text' | 'emoji' | 'voice' = 'text', voiceUrl?: string) => {
     if (!activeChatFriend || !isLoggedIn) return;
+
+    // Reset local typing state immediately when sending a message
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    if (isTypingLocallyRef.current) {
+      isTypingLocallyRef.current = false;
+      updateTypingStatus(false);
+    }
 
     const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
     const roomId = [myFullPhone, activeChatFriend.phoneNumber].sort().join('_');
@@ -1097,23 +1526,9 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = async () => {
+      reader.onloadend = () => {
         const base64String = reader.result as string;
-        setMyProfileImage(base64String);
-        localStorage.setItem('global_call_profile_image', base64String);
-
-        if (isLoggedIn) {
-          const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
-          try {
-            await setDoc(doc(db, "users", myFullPhone), {
-              profileImage: base64String,
-              updatedAt: serverTimestamp()
-            }, { merge: true });
-            console.log("Profile photo updated instantly in Firestore!");
-          } catch (err) {
-            console.error("Failed to instantly save profile photo to Firestore:", err);
-          }
-        }
+        setCropperSrc(base64String); // Opens the Crop adjustments modal workspace!
       };
       reader.readAsDataURL(file);
     }
@@ -1307,36 +1722,32 @@ export default function App() {
 
     // Real Firebase Mode
     try {
-      // 1. Initialize Recaptcha
-      console.log("Initializing RecaptchaVerifier...");
-      const container = document.getElementById('recaptcha-container');
-      if (!container) {
-        throw new Error("Error: 'recaptcha-container' element was not found in the DOM. Please reload the page.");
-      }
-      container.innerHTML = ''; // pristine DOM
-
-      if (recaptchaVerifierRef.current) {
-        try {
-          recaptchaVerifierRef.current.clear();
-        } catch (e) {
-          console.warn("Error clearing old verifier:", e);
-        }
-      }
-
-      const verifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        'size': 'invisible',
-        'callback': (response: any) => {
-          console.log("reCAPTCHA solved successfully! Token:", response);
-        },
-        'expired-callback': () => {
-          console.log("reCAPTCHA verification expired. Please try again.");
-        }
-      });
-      recaptchaVerifierRef.current = verifier;
+      let verifier = recaptchaVerifierRef.current;
       
-      // Explicitly render to bind
-      console.log("Rendering reCAPTCHA widget...");
-      await verifier.render();
+      if (!verifier) {
+        console.log("Pre-warmed reCAPTCHA verifier not found. Initializing inline RecaptchaVerifier...");
+        const container = document.getElementById('recaptcha-container');
+        if (!container) {
+          throw new Error("Error: 'recaptcha-container' element was not found in the DOM. Please reload the page.");
+        }
+        container.innerHTML = ''; // pristine DOM
+
+        verifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          'size': 'invisible',
+          'callback': (response: any) => {
+            console.log("reCAPTCHA solved successfully! Token:", response);
+          },
+          'expired-callback': () => {
+            console.log("reCAPTCHA verification expired. Please try again.");
+          }
+        });
+        recaptchaVerifierRef.current = verifier;
+        
+        console.log("Rendering reCAPTCHA widget...");
+        await verifier.render();
+      } else {
+        console.log("Using pre-warmed reCAPTCHA verifier for lightning-fast dispatch!");
+      }
 
       console.log("Requesting SMS OTP from Firebase for:", fullPhoneNumber);
       const result = await signInWithPhoneNumber(auth, fullPhoneNumber, verifier);
@@ -1434,8 +1845,9 @@ export default function App() {
       console.log("Phone number verified successfully! Welcome", user.phoneNumber);
       
       const verifiedPhone = user.phoneNumber || (selectedCountry.code + userPhone);
-      localStorage.setItem('global_call_user_phone', verifiedPhone);
-      setUserPhone(verifiedPhone);
+      const formattedVerifiedPhone = normalizePhoneToE164(verifiedPhone, selectedCountry.code);
+      localStorage.setItem('global_call_user_phone', formattedVerifiedPhone);
+      setUserPhone(formattedVerifiedPhone);
 
       // Save current selected country details to localStorage
       localStorage.setItem('global_call_country_name', selectedCountry.name);
@@ -1443,7 +1855,7 @@ export default function App() {
       
       // Check for existing profile in Firestore
       try {
-        const uSnap = await getDoc(doc(db, "users", verifiedPhone));
+        const uSnap = await getDoc(doc(db, "users", formattedVerifiedPhone));
         if (uSnap.exists()) {
           const uData = uSnap.data();
           localStorage.setItem('global_call_profile_name', uData.name || '');
@@ -1466,11 +1878,22 @@ export default function App() {
           setMyBio(uData.bio || 'Hey there! I am using Global Call.');
           setIsProfileSetupDone(true);
         } else {
+          // Auto-create base user document in Firestore immediately so other users can find them instantly
+          await setDoc(doc(db, "users", formattedVerifiedPhone), {
+            uid: user.uid,
+            phoneNumber: formattedVerifiedPhone,
+            name: localStorage.getItem('global_call_profile_name') || "User",
+            status: "online",
+            countryName: selectedCountry.name,
+            countryCode: selectedCountry.code,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+
           const hasCompletedProfile = localStorage.getItem('global_call_profile_setup_done') === 'true';
           setIsProfileSetupDone(hasCompletedProfile);
         }
       } catch (err) {
-        console.warn("Could not retrieve existing user profile:", err);
+        console.warn("Could not retrieve or create existing user profile:", err);
         const hasCompletedProfile = localStorage.getItem('global_call_profile_setup_done') === 'true';
         setIsProfileSetupDone(hasCompletedProfile);
       }
@@ -1562,7 +1985,8 @@ export default function App() {
     setIsSearchingFriend(true);
 
     const formattedPhone = normalizePhoneToE164(newFriendPhone, newFriendCountry.code);
-    const isDuplicate = friends.some(f => f.phoneNumber === formattedPhone);
+    const cleanSearchDigits = newFriendPhone.replace(/\D/g, '');
+    const isDuplicate = friends.some(f => f.phoneNumber === formattedPhone || f.phoneNumber.replace(/\D/g, '').includes(cleanSearchDigits));
 
     if (isDuplicate) {
       setAddFriendError('This user is already in your contact list!');
@@ -1570,69 +1994,47 @@ export default function App() {
       return;
     }
 
-    let finalFriendStatus: 'online' | 'offline' = 'offline';
-    let syncedName = newFriendName;
+    // Timeout helper (5 seconds)
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Search timeout')), 5000));
+
     let userExists = false;
-    let verifiedE164Phone = formattedPhone;
     let foundUserData: any = null;
+    let verifiedE164Phone = formattedPhone;
+    let syncedName = newFriendName;
 
     try {
-      // Direct Doc Lookup (super fast lookup)
-      const uSnap = await getDoc(doc(db, "users", formattedPhone));
-      if (uSnap.exists()) {
-        foundUserData = uSnap.data();
-        userExists = true;
-      } else {
-        // Fallback 1: Query database collection for matching phone number string
-        const q1 = query(collection(db, "users"), where("phoneNumber", "==", formattedPhone));
-        const qSnap1 = await getDocs(q1);
-        if (!qSnap1.empty) {
-          foundUserData = qSnap1.docs[0].data();
-          verifiedE164Phone = qSnap1.docs[0].id; // Use actual Firestore Document ID
-          userExists = true;
-        } else {
-          // Fallback 2: Check matching end digits to support varied formats (e.g., standard 10 digits)
-          const digitsOnly = formattedPhone.replace(/\D/g, '');
-          const lastTenDigits = digitsOnly.slice(-10);
-          if (lastTenDigits.length >= 10) {
-            const q2 = query(collection(db, "users"));
-            const qSnap2 = await getDocs(q2);
-            const matchedDoc = qSnap2.docs.find(d => {
-              const cleanedId = d.id.replace(/\D/g, '');
-              return cleanedId.endsWith(lastTenDigits);
-            });
-            if (matchedDoc) {
-              foundUserData = matchedDoc.data();
-              verifiedE164Phone = matchedDoc.id;
-              userExists = true;
-            }
+      await Promise.race([
+        (async () => {
+          const docRef = doc(db, "users", formattedPhone);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            foundUserData = docSnap.data();
+            verifiedE164Phone = foundUserData.phoneNumber || formattedPhone;
+            syncedName = foundUserData.name || newFriendName;
+            userExists = true;
           }
-        }
-      }
-
-      if (userExists && foundUserData) {
-        finalFriendStatus = foundUserData.status || 'offline';
-        syncedName = foundUserData.name || newFriendName;
-      }
+        })(),
+        timeoutPromise
+      ]);
     } catch (err) {
-      console.warn("Could not lookup user in Firestore during contact add:", err);
+      console.warn("Search timed out or failed:", err);
     }
 
-    if (!userExists && engineMode !== 'demo') {
-      setAddFriendError("This user is not registered on this app yet. Invite them to register!");
+    if (!userExists) {
       setIsSearchingFriend(false);
+      setAddFriendError("Friend not found, please check number");
       return;
     }
 
     const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
 
     try {
-      // 1. Optimistic UI update: Instantly insert into the local contact list
+      // 1. Optimistic UI update: Instantly insert into local contact list
       const newFriendObj: Friend = {
         id: verifiedE164Phone,
         name: syncedName,
         phoneNumber: verifiedE164Phone,
-        status: finalFriendStatus,
+        status: foundUserData?.status || 'online',
         profileImage: foundUserData?.profileImage || "",
         bio: foundUserData?.bio || ""
       };
@@ -1645,15 +2047,15 @@ export default function App() {
         return updated;
       });
 
-      // 2. Perform background write to current user's friends list
+      // 2. Save to current user's friends subcollection in Firestore
       await setDoc(doc(db, "users", myFullPhone, "friends", verifiedE164Phone), {
         name: syncedName,
         phoneNumber: verifiedE164Phone,
-        status: finalFriendStatus,
+        status: foundUserData?.status || 'online',
         addedAt: serverTimestamp()
       });
 
-      // 3. Reciprocal/mutual connection: Instantly save my profile in their friends list
+      // 3. Reciprocal connection
       try {
         await setDoc(doc(db, "users", verifiedE164Phone, "friends", myFullPhone), {
           name: myProfileName || "Friend",
@@ -1665,9 +2067,7 @@ export default function App() {
         console.warn("Could not save reciprocal connection:", eRecip);
       }
 
-      // 4. Auto open newly added verified friend's chat screen directly!
       setActiveChatFriend(newFriendObj);
-
       setNewFriendName('');
       setNewFriendPhone('');
       setAddFriendError(null);
@@ -2291,11 +2691,12 @@ export default function App() {
                     localStorage.setItem('global_call_profile_avatar_idx', myAvatarIdx.toString());
                     localStorage.setItem('global_call_profile_setup_done', 'true');
 
-                    const myFullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
+                    const rawPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
+                    const formattedPhone = normalizePhoneToE164(rawPhone, selectedCountry.code);
                     try {
-                      await setDoc(doc(db, "users", myFullPhone), {
+                      await setDoc(doc(db, "users", formattedPhone), {
                         uid: auth.currentUser?.uid || "demo_uid_" + Date.now(),
-                        phoneNumber: myFullPhone,
+                        phoneNumber: formattedPhone,
                         name: myProfileName,
                         username: myUsername,
                         avatarIdx: myAvatarIdx,
@@ -2354,12 +2755,23 @@ export default function App() {
                     </div>
                     <div>
                       <h4 className="font-bold text-xs text-zinc-100">{chatPartner.name}</h4>
-                      <p className="text-[10px] text-zinc-500 font-mono mt-0.5 flex items-center gap-1.5">
-                        <span className={`w-1.5 h-1.5 rounded-full ${chatPartner.status === 'online' ? 'bg-emerald-500' : 'bg-zinc-600'}`} />
-                        <span>{chatPartner.status === 'online' ? 'Online' : 'Offline'}</span>
-                        <span>•</span>
-                        <span>{chatPartner.phoneNumber}</span>
-                      </p>
+                      {isPartnerTyping ? (
+                        <p className="text-[10px] text-teal-400 font-bold animate-pulse mt-0.5 flex items-center gap-1">
+                          <span className="flex gap-0.5 items-center">
+                            <span className="w-1 h-1 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <span className="w-1 h-1 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <span className="w-1 h-1 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                          </span>
+                          <span>Typing...</span>
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-zinc-500 font-mono mt-0.5 flex items-center gap-1.5">
+                          <span className={`w-1.5 h-1.5 rounded-full ${chatPartner.status === 'online' ? 'bg-emerald-500' : 'bg-zinc-600'}`} />
+                          <span>{chatPartner.status === 'online' ? 'Online' : 'Offline'}</span>
+                          <span>•</span>
+                          <span>{chatPartner.phoneNumber}</span>
+                        </p>
+                      )}
                       {chatPartner.bio && (
                         <p className="text-[10px] text-teal-400 font-medium italic mt-0.5 max-w-[180px] truncate" title={chatPartner.bio}>
                           "{chatPartner.bio}"
@@ -2516,7 +2928,7 @@ export default function App() {
                         <input
                           type="text"
                           value={typedMessage}
-                          onChange={(e) => setTypedMessage(e.target.value)}
+                          onChange={(e) => handleTypedMessageChange(e.target.value)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && typedMessage.trim()) {
                               sendMessage(typedMessage.trim(), 'text');
@@ -2581,6 +2993,15 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => setShowQrModal(true)}
+                      className="p-2 py-1.5 sm:p-2.5 sm:py-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/25 transition cursor-pointer flex items-center gap-1.5 text-[11px] sm:text-xs font-bold"
+                      title="Show Profile QR Code"
+                    >
+                      <Share2 size={13} />
+                      <span className="hidden sm:inline">My QR</span>
+                    </button>
+
                     <button
                       onClick={() => setShowSettings(true)}
                       className="p-2 py-1.5 sm:p-2.5 sm:py-2 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/25 transition cursor-pointer flex items-center gap-1.5 text-[11px] sm:text-xs font-bold"
@@ -2726,85 +3147,149 @@ export default function App() {
                       </div>
                     )
                   ) : dashboardTab === 'recents' ? (
-                    recentCalls.length === 0 ? (
-                      <div className="text-center py-16 px-4 space-y-3">
-                        <Clock size={36} className="text-zinc-700 mx-auto" />
-                        <h4 className="font-semibold text-zinc-400 text-xs font-mono">No call logs yet</h4>
-                        <p className="text-[11px] text-zinc-600 max-w-xs mx-auto leading-relaxed">
-                          Your dialed or received audio and video WebRTC connection history will display here.
-                        </p>
+                    <div className="flex flex-col h-full">
+                      {/* Schedule Call Header Action */}
+                      <div className="p-3 bg-zinc-900/50 border-b border-zinc-800 flex items-center justify-between">
+                        <span className="text-xs font-bold text-zinc-300">Upcoming Scheduled Calls ({scheduledCalls.length})</span>
+                        <button
+                          onClick={() => setShowScheduleModal(true)}
+                          className="px-3 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-zinc-950 font-bold text-xs transition flex items-center gap-1.5 shadow-md shadow-teal-500/10 cursor-pointer"
+                        >
+                          <Clock size={12} />
+                          <span>Schedule Call</span>
+                        </button>
                       </div>
-                    ) : (
-                      <div className="divide-y divide-zinc-850/50">
-                        {recentCalls.map((call) => {
-                          const isOutgoing = call.type === 'outgoing';
-                          const isMissed = call.status === 'missed';
 
-                          return (
-                            <div key={call.id} className="p-4 flex items-center justify-between gap-3 hover:bg-zinc-800/10 transition">
-                              
-                              <div className="flex items-center gap-3">
-                                <div className={`w-9 h-9 rounded-full border flex items-center justify-center relative ${isMissed ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-zinc-850 border-zinc-800 text-zinc-300'}`}>
-                                  {call.callType === 'video' ? <Video size={14} /> : <Phone size={13} />}
-                                  <span className="absolute -bottom-1 -right-1 w-4.5 h-4.5 rounded-full bg-zinc-950 border border-zinc-850 flex items-center justify-center shadow-md">
-                                    {isOutgoing ? (
-                                      <ArrowUpRight size={8} className="text-teal-400" />
-                                    ) : isMissed ? (
-                                      <PhoneMissed size={7} className="text-rose-500" />
-                                    ) : (
-                                      <ArrowDownLeft size={8} className="text-emerald-400" />
-                                    )}
-                                  </span>
+                      {/* Scheduled Calls List */}
+                      {scheduledCalls.length > 0 && (
+                        <div className="p-3 bg-teal-500/5 border-b border-zinc-800/80 space-y-2">
+                          {scheduledCalls.map((sch) => (
+                            <div key={sch.id} className="bg-zinc-900 border border-teal-500/30 rounded-xl p-3 flex items-center justify-between gap-2 shadow-sm">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-full bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-300">
+                                  {sch.callType === 'video' ? <Video size={13} /> : <Phone size={12} />}
                                 </div>
-
                                 <div>
-                                  <div className="flex items-center gap-1.5">
-                                    <h4 className="font-bold text-xs text-zinc-100">{call.name}</h4>
-                                    <span className={`text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-wider ${isMissed ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-                                      {isMissed ? 'Missed' : 'Completed'}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-mono mt-0.5">
-                                    <span>{call.phoneNumber}</span>
+                                  <h5 className="font-bold text-xs text-zinc-100">{sch.recipientName}</h5>
+                                  <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-0.5">
+                                    <span className="text-teal-400 font-bold">{sch.scheduledAt.replace('T', ' ')}</span>
                                     <span>•</span>
-                                    <span>{call.timestamp}</span>
+                                    <span>{sch.note}</span>
                                   </div>
                                 </div>
                               </div>
-
-                              <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-mono text-zinc-500 mr-2">
-                                  {isMissed ? 'No Answer' : formatDuration(call.duration)}
-                                </span>
+                              <div className="flex items-center gap-1.5">
                                 <button
                                   onClick={() => {
-                                    const friendObj = friends.find(f => f.phoneNumber === call.phoneNumber) || {
+                                    const friendObj = friends.find(f => f.phoneNumber === sch.recipientPhone) || {
                                       id: Date.now().toString(),
-                                      name: call.name,
-                                      phoneNumber: call.phoneNumber,
+                                      name: sch.recipientName,
+                                      phoneNumber: sch.recipientPhone,
                                       status: 'online' as const
                                     };
-                                    startCall(friendObj, call.callType);
+                                    startCall(friendObj, sch.callType);
                                   }}
-                                  className="p-2 rounded-lg bg-zinc-850 hover:bg-zinc-800 text-teal-400 transition"
-                                  title="Redial"
+                                  className="p-2 rounded-lg bg-teal-500 hover:bg-teal-400 text-zinc-950 transition active:scale-95 cursor-pointer"
+                                  title="Call Now"
                                 >
-                                  {call.callType === 'video' ? <Video size={12} /> : <Phone size={12} />}
+                                  <Phone size={12} />
                                 </button>
                                 <button
-                                  onClick={() => removeRecentCall(call.id)}
-                                  className="p-2 rounded-lg bg-zinc-900 hover:bg-rose-950/20 text-zinc-600 hover:text-rose-400 transition"
-                                  title="Delete log"
+                                  onClick={() => handleDeleteScheduledCall(sch.id)}
+                                  className="p-2 rounded-lg bg-zinc-800 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 transition cursor-pointer"
+                                  title="Cancel Scheduled Call"
                                 >
                                   <Trash2 size={12} />
                                 </button>
                               </div>
-
                             </div>
-                          );
-                        })}
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Recent Call Logs */}
+                      <div className="flex-grow overflow-y-auto divide-y divide-zinc-850/50">
+                        {recentCalls.length === 0 ? (
+                          <div className="text-center py-16 px-4 space-y-3">
+                            <Clock size={36} className="text-zinc-700 mx-auto" />
+                            <h4 className="font-semibold text-zinc-400 text-xs font-mono">No call logs yet</h4>
+                            <p className="text-[11px] text-zinc-600 max-w-xs mx-auto leading-relaxed">
+                              Your dialed or received audio and video WebRTC connection history will display here.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-zinc-850/50">
+                            {recentCalls.map((call) => {
+                              const isOutgoing = call.type === 'outgoing';
+                              const isMissed = call.status === 'missed';
+
+                              return (
+                                <div key={call.id} className="p-4 flex items-center justify-between gap-3 hover:bg-zinc-800/10 transition">
+                                  
+                                  <div className="flex items-center gap-3">
+                                    <div className={`w-9 h-9 rounded-full border flex items-center justify-center relative ${isMissed ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-zinc-850 border-zinc-800 text-zinc-300'}`}>
+                                      {call.callType === 'video' ? <Video size={14} /> : <Phone size={13} />}
+                                      <span className="absolute -bottom-1 -right-1 w-4.5 h-4.5 rounded-full bg-zinc-950 border border-zinc-850 flex items-center justify-center shadow-md">
+                                        {isOutgoing ? (
+                                          <ArrowUpRight size={8} className="text-teal-400" />
+                                        ) : isMissed ? (
+                                          <PhoneMissed size={7} className="text-rose-500" />
+                                        ) : (
+                                          <ArrowDownLeft size={8} className="text-emerald-400" />
+                                        )}
+                                      </span>
+                                    </div>
+
+                                    <div>
+                                      <div className="flex items-center gap-1.5">
+                                        <h4 className="font-bold text-xs text-zinc-100">{call.name}</h4>
+                                        <span className={`text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-wider ${isMissed ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                                          {isMissed ? 'Missed' : 'Completed'}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-mono mt-0.5">
+                                        <span>{call.phoneNumber}</span>
+                                        <span>•</span>
+                                        <span>{call.timestamp}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-mono text-zinc-500 mr-2">
+                                      {isMissed ? 'No Answer' : formatDuration(call.duration)}
+                                    </span>
+                                    <button
+                                      onClick={() => {
+                                        const friendObj = friends.find(f => f.phoneNumber === call.phoneNumber) || {
+                                          id: Date.now().toString(),
+                                          name: call.name,
+                                          phoneNumber: call.phoneNumber,
+                                          status: 'online' as const
+                                        };
+                                        startCall(friendObj, call.callType);
+                                      }}
+                                      className="p-2 rounded-lg bg-zinc-850 hover:bg-zinc-800 text-teal-400 transition"
+                                      title="Redial"
+                                    >
+                                      {call.callType === 'video' ? <Video size={12} /> : <Phone size={12} />}
+                                    </button>
+                                    <button
+                                      onClick={() => removeRecentCall(call.id)}
+                                      className="p-2 rounded-lg bg-zinc-900 hover:bg-rose-950/20 text-zinc-600 hover:text-rose-400 transition"
+                                      title="Delete log"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    )
+                    </div>
                   ) : (
                     savedRecordings.length === 0 ? (
                       <div className="text-center py-16 px-4 space-y-3">
@@ -3716,6 +4201,287 @@ export default function App() {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive Circular Profile Photo Cropper Modal */}
+      {cropperSrc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fadeIn">
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-5">
+            
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-black text-zinc-100 flex items-center gap-2">
+                <Sparkles size={16} className="text-teal-400 animate-pulse" />
+                Adjust Profile Photo
+              </h3>
+              <button 
+                onClick={() => {
+                  setCropperSrc(null);
+                  setCropScale(1);
+                  setCropPosition({ x: 0, y: 0 });
+                }}
+                className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-[10px] text-zinc-500 font-medium">
+              Drag your image to position it inside the circular viewfinder. Use the slider below to zoom in or out.
+            </p>
+
+            {/* Viewfinder circle workspace */}
+            <div 
+              className="relative w-64 h-64 mx-auto bg-zinc-950 rounded-2xl overflow-hidden border border-zinc-800 select-none touch-none flex items-center justify-center cursor-grab active:cursor-grabbing"
+              onMouseDown={handleCropMouseDown}
+              onMouseMove={handleCropMouseMove}
+              onMouseUp={handleCropMouseUp}
+              onMouseLeave={handleCropMouseUp}
+              onTouchStart={handleCropTouchStart}
+              onTouchMove={handleCropTouchMove}
+              onTouchEnd={handleCropMouseUp}
+            >
+              {/* Image being cropped */}
+              <div 
+                className="absolute transition-transform duration-75 pointer-events-none"
+                style={{
+                  transform: `translate(${cropPosition.x}px, ${cropPosition.y}px) scale(${cropScale})`,
+                }}
+              >
+                <img 
+                  src={cropperSrc} 
+                  alt="Crop Target" 
+                  className="max-w-xs max-h-64 object-contain" 
+                  draggable={false}
+                />
+              </div>
+
+              {/* Viewfinder Circle Mask */}
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                <div className="w-48 h-48 rounded-full border-2 border-teal-500 shadow-[0_0_0_9999px_rgba(9,9,11,0.7)]" />
+              </div>
+            </div>
+
+            {/* Zoom Slider */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-bold uppercase text-zinc-500 tracking-wider">
+                <span>Zoom Level</span>
+                <span className="text-teal-400 font-mono">{cropScale.toFixed(2)}x</span>
+              </div>
+              <input 
+                type="range"
+                min="1"
+                max="3"
+                step="0.05"
+                value={cropScale}
+                onChange={(e) => setCropScale(parseFloat(e.target.value))}
+                className="w-full accent-teal-500 h-1 bg-zinc-850 rounded-lg appearance-none cursor-pointer"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setCropperSrc(null);
+                  setCropScale(1);
+                  setCropPosition({ x: 0, y: 0 });
+                }}
+                className="flex-1 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs transition cursor-pointer text-center"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveCrop}
+                className="flex-1 py-3 rounded-xl bg-teal-500 hover:bg-teal-400 text-zinc-950 font-bold text-xs shadow-lg shadow-teal-500/10 transition cursor-pointer text-center"
+              >
+                Apply Crop
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Schedule Call Modal */}
+      {showScheduleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-md rounded-3xl p-6 shadow-2xl relative overflow-hidden space-y-5">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                <Clock size={16} className="text-teal-400" />
+                Schedule a Future Call
+              </h3>
+              <button 
+                onClick={() => setShowScheduleModal(false)}
+                className="text-zinc-400 hover:text-white transition cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs text-zinc-400 font-medium mb-1">Select Contact or Enter Phone</label>
+                {friends.length > 0 && (
+                  <select
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        const f = friends.find(friend => friend.phoneNumber === e.target.value);
+                        if (f) {
+                          setScheduleTargetPhone(f.phoneNumber);
+                          setScheduleTargetName(f.name);
+                        }
+                      }
+                    }}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-200 mb-2 focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="">-- Choose from Contacts --</option>
+                    {friends.map(f => (
+                      <option key={f.id} value={f.phoneNumber}>{f.name} ({f.phoneNumber})</option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  type="tel"
+                  value={scheduleTargetPhone}
+                  onChange={(e) => setScheduleTargetPhone(e.target.value)}
+                  placeholder="Target Phone Number (e.g. +977...)"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-xs text-zinc-100 placeholder-zinc-700 focus:outline-none focus:border-teal-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 font-medium mb-1">Call Type</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleCallType('audio')}
+                    className={`py-2 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${scheduleCallType === 'audio' ? 'bg-teal-500/20 border-teal-500 text-teal-300' : 'bg-zinc-950 border-zinc-800 text-zinc-400'}`}
+                  >
+                    <Phone size={13} />
+                    Audio Call
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleCallType('video')}
+                    className={`py-2 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${scheduleCallType === 'video' ? 'bg-teal-500/20 border-teal-500 text-teal-300' : 'bg-zinc-950 border-zinc-800 text-zinc-400'}`}
+                  >
+                    <Video size={13} />
+                    Video Call
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 font-medium mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={scheduleDate}
+                    onChange={(e) => setScheduleDate(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-100 focus:outline-none focus:border-teal-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 font-medium mb-1">Time</label>
+                  <input
+                    type="time"
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-100 focus:outline-none focus:border-teal-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 font-medium mb-1">Agenda / Note (Optional)</label>
+                <input
+                  type="text"
+                  value={scheduleNote}
+                  onChange={(e) => setScheduleNote(e.target.value)}
+                  placeholder="e.g., Weekly sync meeting"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-100 placeholder-zinc-700 focus:outline-none focus:border-teal-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                onClick={() => setShowScheduleModal(false)}
+                className="flex-1 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs transition cursor-pointer text-center"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveScheduledCall}
+                className="flex-1 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-zinc-950 font-bold text-xs transition cursor-pointer text-center shadow-lg shadow-teal-500/10"
+              >
+                Save Schedule
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Profile Sharing Modal */}
+      {showQrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-sm rounded-3xl p-6 shadow-2xl relative text-center space-y-5">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                <Share2 size={16} className="text-teal-400" />
+                Share My Profile QR Code
+              </h3>
+              <button 
+                onClick={() => setShowQrModal(false)}
+                className="text-zinc-400 hover:text-white transition cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-400">
+              Have your friend scan this QR code using their camera or Add Friend scanner to connect with you instantly!
+            </p>
+
+            {/* QR Code Container */}
+            <div className="bg-white p-5 rounded-2xl w-fit mx-auto shadow-xl border-4 border-teal-500/20">
+              <QRCodeSVG 
+                value={userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone)}
+                size={180}
+                level="H"
+                includeMargin={true}
+                bgColor="#ffffff"
+                fgColor="#09090b"
+              />
+            </div>
+
+            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3.5 space-y-1">
+              <p className="text-[11px] font-bold text-zinc-200">{myProfileName}</p>
+              <p className="text-xs font-mono text-teal-400 font-bold">{userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone)}</p>
+            </div>
+
+            <div className="flex gap-2.5 pt-1">
+              <button
+                onClick={() => {
+                  const fullPhone = userPhone.startsWith('+') ? userPhone : (selectedCountry.code + userPhone);
+                  navigator.clipboard.writeText(fullPhone);
+                  showToast("Phone number copied to clipboard!", "success");
+                }}
+                className="flex-1 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs transition cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Copy size={13} />
+                <span>Copy Number</span>
+              </button>
+              <button
+                onClick={() => setShowQrModal(false)}
+                className="flex-1 py-3 rounded-xl bg-teal-500 hover:bg-teal-400 text-zinc-950 font-bold text-xs transition cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

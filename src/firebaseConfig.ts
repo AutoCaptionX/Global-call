@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, getFirestore } from "firebase/firestore";
 
 // Safe dynamic loader check for environment variables with robust production fallbacks
 const getEnvVar = (key: string): string => {
@@ -34,10 +34,18 @@ export const cloudinaryConfig = {
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
-// Initialize Firestore with robust, modern multi-tab local caching for elegant offline resilience
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
-});
+// Initialize Firestore safely with fallback if IndexedDB is blocked in sandboxed preview iframe structures
+let dbInstance;
+try {
+  dbInstance = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  });
+  console.log("Firestore successfully initialized with multi-tab persistent local cache.");
+} catch (e) {
+  console.warn("Persistent local cache is blocked in this sandboxed context. Falling back to default cache:", e);
+  dbInstance = getFirestore(app);
+}
 
+export const db = dbInstance;

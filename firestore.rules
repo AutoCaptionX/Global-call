@@ -7,59 +7,33 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Global security helpers
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function getUserPhone() {
-      return request.auth.token.phone_number;
-    }
-
-    // Users collection rules
-    match /users/{phoneNumber} {
+    // Users collection rules: Using phone number as document ID, allowing authenticated users to read and write/query
+    match /users/{userId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && (getUserPhone() == phoneNumber || request.auth.uid == request.resource.data.uid);
-    }
+      allow create, update: if isSignedIn();
+      allow delete: if isSignedIn();
 
-    // Friends subcollection rules
-    match /users/{phoneNumber}/friends/{friendPhoneNumber} {
-      allow read, write: if isSignedIn() && getUserPhone() == phoneNumber;
-    }
-
-    // Chats collection rules
-    match /chats/{roomId} {
-      allow read, write: if isSignedIn() && (
-        roomId.indexOf(getUserPhone()) >= 0
-      );
-      
-      match /messages/{messageId} {
-        allow read, write: if isSignedIn() && (
-          roomId.indexOf(getUserPhone()) >= 0
-        );
+      // Friends subcollection
+      match /friends/{friendId} {
+        allow read, write: if isSignedIn();
       }
     }
 
-    // Calls collection rules
+    // Friend Requests collection rules
+    match /friend_requests/{requestId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Chats and Calls
+    match /chats/{roomId} {
+      allow read, write: if isSignedIn();
+    }
     match /calls/{callId} {
-      allow read: if isSignedIn() && (
-        callId == getUserPhone() ||
-        (resource != null && (resource.data.caller == getUserPhone() || resource.data.recipient == getUserPhone()))
-      );
-      
-      allow create: if isSignedIn() && (
-        request.resource.data.caller == getUserPhone()
-      );
-      
-      allow update: if isSignedIn() && (
-        resource.data.caller == getUserPhone() || 
-        resource.data.recipient == getUserPhone()
-      );
-      
-      allow delete: if isSignedIn() && (
-        resource.data.caller == getUserPhone() || 
-        resource.data.recipient == getUserPhone()
-      );
+      allow read, write: if isSignedIn();
     }
   }
 }

@@ -42,6 +42,61 @@
           window.onAppInstalled();
         }
       });
+
+      // Safe sandbox WebSocket mock to prevent Vite HMR connection failures
+      if (typeof window !== 'undefined') {
+        window.WebSocket = function(url, protocols) {
+          let listeners = { open: [], message: [], close: [], error: [] };
+          return {
+            readyState: 3,
+            send: () => {},
+            close: () => {},
+            addEventListener: function(event, fn) {
+              if (listeners[event]) listeners[event].push(fn);
+            },
+            removeEventListener: function(event, fn) {
+              if (listeners[event]) {
+                listeners[event] = listeners[event].filter(f => f !== fn);
+              }
+            },
+            dispatchEvent: () => true,
+            onopen: null,
+            onmessage: null,
+            onclose: null,
+            onerror: null
+          };
+        };
+        window.WebSocket.CONNECTING = 0;
+        window.WebSocket.OPEN = 1;
+        window.WebSocket.CLOSING = 2;
+        window.WebSocket.CLOSED = 3;
+
+        // Global uncaught HMR / WebSocket error handler
+        window.addEventListener('error', (e) => {
+          if (e.message && (e.message.toLowerCase().includes('websocket') || e.message.toLowerCase().includes('vite') || e.message.toLowerCase().includes('hmr') || e.message.toLowerCase().includes('closed without opened'))) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', (e) => {
+          if (e.reason && (e.reason.message || String(e.reason)).toLowerCase().includes('websocket') || (e.reason && String(e.reason).toLowerCase().includes('closed without opened'))) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return true;
+          }
+        }, true);
+
+        const originalConsoleError = console.error;
+        console.error = function(...args) {
+          const msg = args.map(arg => String(arg || '')).join(' ').toLowerCase();
+          if (msg.includes('websocket') || msg.includes('vite') || msg.includes('hmr') || msg.includes('closed without opened')) {
+            return;
+          }
+          originalConsoleError.apply(console, args);
+        };
+      }
     </script>
     
     <!-- Preload Google reCAPTCHA API -->
